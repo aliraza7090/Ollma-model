@@ -1,30 +1,29 @@
-# Ollama with qwen2.5:3b + nomic-embed-text baked in
-FROM ollama/ollama:latest
-
-# Models to pre-pull into the image
-ENV MODELS="qwen2.5:3b nomic-embed-text"
-
-# Start the server temporarily, pull the models, then shut it down.
-# This bakes the model weights into the image layer so the container
-# is ready to serve immediately (no download on first run).
+FROM ollama/ollama:latest AS full
 RUN ollama serve & \
     pid=$!; \
-    # wait for the API to come up
-    for i in $(seq 1 30); do \
+    for i in $(seq 1 60); do \
         if ollama list >/dev/null 2>&1; then break; fi; \
         sleep 1; \
     done; \
-    ollama pull qwen2.5:3b && \
+    ollama pull qwen3:14b && \
     ollama pull nomic-embed-text && \
     ollama list && \
-    kill $pid
+    kill $pid || true
+RUN rm -rf /usr/lib/ollama/mlx_cuda_v13 \
+           /usr/lib/ollama/cuda_v12 \
+           /usr/lib/ollama/cuda_v13 \
+           /usr/lib/ollama/vulkan \
+           /usr/lib/ollama/include
 
-# Ollama API port
+FROM ubuntu:24.04
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates libstdc++6 libgomp1 && \
+    rm -rf /var/lib/apt/lists/*
+COPY --from=full /usr/bin/ollama   /usr/bin/ollama
+COPY --from=full /usr/lib/ollama   /usr/lib/ollama
+COPY --from=full /root/.ollama     /root/.ollama
+ENV OLLAMA_HOST=0.0.0.0:11434 \
+    OLLAMA_MODELS=/root/.ollama/models
 EXPOSE 11434
-
-# Required for ECS (both awsvpc and bridge networking): bind to all
-# interfaces, not loopback, so the ALB / other tasks can reach the API.
-ENV OLLAMA_HOST=0.0.0.0
-
-# The base image's ENTRYPOINT is "ollama"; default it to "serve"
+ENTRYPOINT ["/usr/bin/ollama"]
 CMD ["serve"]
